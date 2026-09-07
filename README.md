@@ -93,6 +93,17 @@ docker build -t shani-agent .
 docker run -d --env-file .env -p 3000:3000 -v shani-data:/app/data shani-agent
 ```
 
+### Google Cloud (Compute Engine VM + automatic HTTPS)
+The app is a long-running process with a local SQLite file, so a small VM fits better than Cloud Run.
+1. In the Google Cloud console create an **e2-micro** VM (Debian 12, allow HTTP + HTTPS traffic, static external IP).
+2. Open the VM's browser SSH window and run:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/imrishifman/shani-time-agent/main/deploy/setup-vm.sh | bash
+   ```
+   It installs Docker, clones this repo, and sets `PUBLIC_HOST`/`PUBLIC_URL` to `https://<external-ip>.sslip.io` (a free DNS name that resolves to the IP; Caddy gets a Let's Encrypt certificate for it automatically). If you own a domain, point a subdomain at the IP and use that instead.
+3. `nano .env` to fill in the keys, then `sudo docker compose up -d --build`.
+4. Register `https://<host>/auth/google/callback` as the OAuth redirect URI and `https://<host>/webhooks/whatsapp` as the Twilio webhook.
+
 ## Local testing without WhatsApp
 Set `WHATSAPP_PROVIDER=console` and messages print to the terminal:
 ```bash
