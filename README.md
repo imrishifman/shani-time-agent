@@ -93,6 +93,36 @@ docker build -t shani-agent .
 docker run -d --env-file .env -p 3000:3000 -v shani-data:/app/data shani-agent
 ```
 
+### Google Cloud (Compute Engine VM)
+The app is a long-running process with a local SQLite file, so a small always-on VM
+suits it better than a serverless runtime. An `e2-micro` (1 GB RAM, free tier) is enough.
+
+1. Create the VM: Debian 12, allow HTTP and HTTPS traffic, and reserve a static
+   external IP.
+2. In the VM's SSH window run `deploy/setup-vm.sh` (edit `HOST` and `CERTBOT_EMAIL`
+   at the top first). It installs Node 24, Nginx and Certbot, clones the repo to
+   `/opt/shani-time-agent`, builds, registers a `shani-agent` systemd service, and
+   obtains a Let's Encrypt certificate.
+3. Fill in `/opt/shani-time-agent/.env`, then `sudo systemctl restart shani-agent`.
+4. Register `https://<host>/auth/google/callback` as the OAuth redirect URI and
+   `https://<host>/webhooks/whatsapp` as the Twilio webhook.
+
+Without a domain, `<external-ip>.sslip.io` resolves to the IP and works with
+Let's Encrypt.
+
+Useful commands on the VM:
+```bash
+sudo systemctl status shani-agent
+sudo journalctl -u shani-agent -f
+cd /opt/shani-time-agent && git pull && npm ci && npm run build && sudo systemctl restart shani-agent
+```
+
+**Build memory.** The project deliberately depends on `@googleapis/calendar` rather
+than the `googleapis` meta-package. The latter ships around 207 MB of type
+definitions for every Google API and pushes `tsc` past 1.2 GB, which will not build
+on a 1 GB VM. The per-API package has the same OAuth2 and `calendar_v3` surface and
+keeps the build near 376 MB.
+
 ### Google Cloud (Compute Engine VM + automatic HTTPS)
 The app is a long-running process with a local SQLite file, so a small VM fits better than Cloud Run.
 1. In the Google Cloud console create an **e2-micro** VM (Debian 12, allow HTTP + HTTPS traffic, static external IP).

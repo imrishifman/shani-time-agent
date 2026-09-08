@@ -1,49 +1,120 @@
 #!/usr/bin/env bash
-# One-shot setup for a fresh Debian/Ubuntu Google Compute Engine VM.
-# Run in the VM's SSH window:
-#   curl -fsSL https://raw.githubusercontent.com/imrishifman/shani-time-agent/main/deploy/setup-vm.sh | bash
-set -euo pipefail
+set -Eeuo pipefail
 
-REPO="https://github.com/imrishifman/shani-time-agent.git"
-DIR="$HOME/shani-time-agent"
+APP_NAME="shani-agent"
+APP_DIR="/opt/shani-time-agent"
+REPO_URL="https://github.com/imrishifman/shani-time-agent.git"
+REPO_BRANCH="main"
+HOST="34.172.154.187.sslip.io"
+CERTBOT_EMAIL="imri@babalata.com"
+APP_PORT="3000"
 
-echo "==> Installing Docker, git"
-sudo apt-get update -y -qq
-sudo apt-get install -y -qq ca-certificates curl git >/dev/null
-if ! command -v docker >/dev/null; then
-  curl -fsSL https://get.docker.com | sudo sh >/dev/null
+if [[ "${EUID}" -eq 0 ]]; then
+  DEPLOY_USER="${SUDO_USER:-root}"
+else
+  DEPLOY_USER="${USER}"
 fi
-sudo usermod -aG docker "$USER" || true
+DEPLOY_GROUP="$(id -gn "${DEPLOY_USER}")"
 
-# Small VMs (e2-micro) need swap to build the TypeScript image.
-if [ ! -f /swapfile ]; then
-  echo "==> Adding 2G swap"
-  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile >/dev/null && sudo swapon /swapfile
-  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
-fi
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git gnupg nginx certbot python3-certbot-nginx
 
-echo "==> Fetching the app"
-if [ -d "$DIR/.git" ]; then git -C "$DIR" pull -q; else git clone -q "$REPO" "$DIR"; fi
-cd "$DIR"
-[ -f .env ] || cp .env.example .env
-
-IP=$(curl -s -H "Metadata-Flavor: Google" \
-  http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip || true)
-HOST="<your-host>"
-if [ -n "$IP" ]; then
-  HOST="$IP.sslip.io"
-  sed -i "s|^PUBLIC_HOST=.*|PUBLIC_HOST=$HOST|; s|^PUBLIC_URL=.*|PUBLIC_URL=https://$HOST|" .env
-  echo "==> Public host set to https://$HOST"
+if ! command -v node >/dev/null 2>&1 || [[ "$(node -p 'Number(process.versions.node.split(".")[0])')" -lt 22 ]]; then
+  curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+  sudo apt-get install -y nodejs
 fi
 
-cat <<MSG
+if [[ -d "${APP_DIR}/.git" ]]; then
+  sudo -u "${DEPLOY_USER}" git -C "${APP_DIR}" pull --ff-only origin "${REPO_BRANCH}"
+elif [[ -e "${APP_DIR}" ]]; then
+  echo "Refusing to overwrite existing non-Git path: ${APP_DIR}" >&2
+  exit 1
+else
+  sudo mkdir -p "$(dirname "${APP_DIR}")"
+  sudo git clone --branch "${REPO_BRANCH}" --depth 1 "${REPO_URL}" "${APP_DIR}"
+  sudo chown -R "${DEPLOY_USER}:${DEPLOY_GROUP}" "${APP_DIR}"
+fi
 
-Setup done. Next:
-  1. nano ~/shani-time-agent/.env      (fill in ANTHROPIC_API_KEY, USER_WHATSAPP_NUMBER, GOOGLE_*, TWILIO_*)
-  2. cd ~/shani-time-agent && sudo docker compose up -d --build
-  3. sudo docker compose logs -f app   (watch it start)
-  4. Open https://$HOST/auth/google in a browser where Shani is signed in to Google.
+# 1 GB of swap gives the small VM headroom for npm and the build.
+if ! sudo swapon --show | grep -q .; then
+  sudo fallocate -l 1G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=1024
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab >/dev/null
+fi
 
-Google OAuth redirect URI to register:  https://$HOST/auth/google/callback
-Twilio inbound webhook URL:             https://$HOST/webhooks/whatsapp
-MSG
+sudo -u "${DEPLOY_USER}" npm --prefix "${APP_DIR}" ci
+
+# A normal, fully type-checked build. It peaks around 376 MB since the project
+# depends on @googleapis/calendar rather than the whole googleapis bundle.
+sudo -u "${DEPLOY_USER}" npm --prefix "${APP_DIR}" run build
+sudo -u "${DEPLOY_USER}" mkdir -p "${APP_DIR}/data"
+
+if [[ ! -f "${APP_DIR}/.env" ]]; then
+  sudo -u "${DEPLOY_USER}" cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
+fi
+sudo chmod 600 "${APP_DIR}/.env"
+
+sudo tee "/etc/systemd/system/${APP_NAME}.service" >/dev/null <<EOF
+[Unit]
+Description=Shani Time Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${DEPLOY_USER}
+Group=${DEPLOY_GROUP}
+WorkingDirectory=${APP_DIR}
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node ${APP_DIR}/dist/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable "${APP_NAME}.service"
+sudo systemctl stop "${APP_NAME}.service" 2>/dev/null || true
+
+sudo tee "/etc/nginx/sites-available/${APP_NAME}" >/dev/null <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${HOST};
+
+    location / {
+        proxy_pass http://127.0.0.1:${APP_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+sudo ln -sfn "/etc/nginx/sites-available/${APP_NAME}" "/etc/nginx/sites-enabled/${APP_NAME}"
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl enable --now nginx
+
+sudo certbot --nginx \
+  --non-interactive \
+  --agree-tos \
+  --no-eff-email \
+  --redirect \
+  --keep-until-expiring \
+  --email "${CERTBOT_EMAIL}" \
+  -d "${HOST}"
+
+echo
+echo "Configure ${APP_DIR}/.env, then start the app with:"
+echo "  sudo systemctl restart ${APP_NAME}"
+echo
+echo "Setup done"
+echo "Google OAuth URL: https://${HOST}/auth/google"
+echo "Twilio webhook URL: https://${HOST}/webhooks/whatsapp"
