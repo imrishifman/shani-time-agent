@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { config } from "./config.js";
 import * as gcal from "./calendar/google.js";
 import { log } from "./logger.js";
-import { buildDailyBrief, chat } from "./agent/agent.js";
+import { buildDailyBrief, buildWeeklyPlan, chat, renderWeeklyPlanMessage } from "./agent/agent.js";
 import { MODEL } from "./agent/client.js";
 import { listPreferences, pendingProposals, recentMessages } from "./db.js";
 import { flushOutbox, sendToUser } from "./whatsapp/outbox.js";
@@ -82,6 +82,23 @@ export function createApp() {
       res.json(brief);
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Exercises the structured-output path, which the daily brief never touches.
+  app.get("/diag/weekly", guardDiag, async (_req, res) => {
+    try {
+      const result = await buildWeeklyPlan();
+      res.json({
+        ok: true,
+        weekStart: result.weekStart.toISODate(),
+        eventsConsidered: result.events.length,
+        proposalCount: result.plan.proposals.length,
+        message: renderWeeklyPlanMessage(result, result.plan.proposals.map((_, i) => i + 1)),
+        plan: result.plan,
+      });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }
   });
 

@@ -137,7 +137,7 @@ export async function buildDailyBrief(day: DateTime = now()): Promise<BriefResul
 
   const instructions = `Write ${config.USER_NAME}'s morning brief for today in ${langName(config.ASSISTANT_LANGUAGE)}, unless a saved preference says otherwise.
 Structure, all in plain WhatsApp text (bold with *asterisks*, no headers):
-1. One-line greeting with the weekday.
+1. A one-line greeting that addresses her by name and names the weekday, for example "Good morning Shani, it's Tuesday." Never greet the day itself.
 2. Today's events in order: "HH:MM–HH:MM *Title*" plus location if present, each on its own line.
 3. One or two useful notes: a long gap and what it is good for (study if a school deadline or exam is coming, otherwise rest), a conflict, a very early or late item, or a missing lunch break. Skip this if there is nothing worth saying.
 4. If there are pending weekly-plan proposals (see context), one line reminding her she can reply "apply N".
