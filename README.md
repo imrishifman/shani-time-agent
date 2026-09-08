@@ -167,6 +167,12 @@ npm test                         # unit tests for analysis / reminders / chunkin
 
 **Chat.** Each inbound message runs the agent with the last 24 h of conversation and tools for reading/editing the calendar, finding free slots, saving preferences, and applying proposals. Deletions require an explicit confirmation turn. Messages from any other phone number are ignored, and Twilio signatures are verified.
 
+**WhatsApp senders.** A Twilio account can hold several WhatsApp senders, such as a trial
+number and the sandbox. The app records the `To` field of each inbound webhook and replies
+through that same number, so a reply always lands in the conversation she actually started.
+`TWILIO_WHATSAPP_FROM` is only the fallback used before she has ever written. `GET /diag`
+reports both the configured and the active sender.
+
 **Reminders.** Every minute the app checks events starting within the lead time (default 10 min, `reminder_lead_minutes` preference, or a per-event override via chat: "remind me 30 minutes before the exam"). One message per start time, naming what to wrap up. Quiet hours and "snooze reminders until …" are honoured.
 
 **Preferences** live in SQLite and are injected into every prompt, so "I work Sun–Tue 9–17" or "answer me in Hebrew" sticks.

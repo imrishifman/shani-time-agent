@@ -9,14 +9,16 @@ export class TwilioProvider implements WhatsAppProvider {
   private client = twilio(config.TWILIO_ACCOUNT_SID!, config.TWILIO_AUTH_TOKEN!);
   private from = config.TWILIO_WHATSAPP_FROM!;
 
-  async send(to: string, body: string): Promise<SendResult> {
+  async send(to: string, body: string, from?: string): Promise<SendResult> {
+    const sender = from ?? this.from;
     try {
-      const msg = await this.client.messages.create({ from: this.from, to, body });
+      const msg = await this.client.messages.create({ from: sender, to, body });
       return { id: msg.sid };
     } catch (err) {
       const code = (err as { code?: number }).code;
       if (code && WINDOW_CLOSED_CODES.has(code)) throw new WindowClosedError();
-      throw err;
+      // Surface the Twilio code; without it a failed send is indistinguishable from a hang.
+      throw new Error(`Twilio send failed from ${sender}${code ? ` (code ${code})` : ""}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

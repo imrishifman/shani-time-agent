@@ -5,9 +5,9 @@ import * as gcal from "./calendar/google.js";
 import { log } from "./logger.js";
 import { buildDailyBrief, buildWeeklyPlan, chat, renderWeeklyPlanMessage } from "./agent/agent.js";
 import { MODEL } from "./agent/client.js";
-import { listPreferences, pendingProposals, recentMessages } from "./db.js";
+import { listPreferences, pendingOutbox, pendingProposals, recentMessages } from "./db.js";
 import { COMMIT, STARTED_AT } from "./version.js";
-import { flushOutbox, sendToUser } from "./whatsapp/outbox.js";
+import { activeSender, flushOutbox, rememberActiveSender, sendToUser } from "./whatsapp/outbox.js";
 
 const publicUrl = config.PUBLIC_URL.replace(/\/$/, "");
 
@@ -61,6 +61,9 @@ export function createApp() {
       location: config.GOOGLE_CLOUD_LOCATION,
       timezone: config.TIMEZONE,
       provider: config.WHATSAPP_PROVIDER,
+      configuredSender: config.TWILIO_WHATSAPP_FROM ?? null,
+      activeSender: activeSender() ?? null,
+      queuedMessages: pendingOutbox().length,
       googleConnected: gcal.isAuthorized(),
       schedules: {
         dailyBrief: config.DAILY_BRIEF_CRON,
@@ -147,6 +150,9 @@ export function createApp() {
       log.warn(`Ignoring message from unknown sender ${from}`);
       return;
     }
+    // "To" is the Twilio number she wrote to; reply through that same sender.
+    rememberActiveSender(params.To);
+
     const body = (params.Body ?? "").trim();
     const numMedia = Number(params.NumMedia ?? "0");
     if (!body) {

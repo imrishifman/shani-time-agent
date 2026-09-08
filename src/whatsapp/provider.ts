@@ -4,7 +4,7 @@ export type SendResult = { id: string };
 
 export interface WhatsAppProvider {
   /** Send a free-form text message. Throws WindowClosedError when outside the 24h customer-service window. */
-  send(to: string, body: string): Promise<SendResult>;
+  send(to: string, body: string, from?: string): Promise<SendResult>;
   /** Send a pre-approved template (used to re-open the 24h window). */
   sendTemplate(to: string, contentSid: string, variables?: Record<string, string>): Promise<SendResult>;
 }

@@ -24,10 +24,29 @@ export function chunkMessage(text: string, max = MAX_CHUNK): string[] {
   return chunks;
 }
 
+const ACTIVE_FROM_KEY = "active_whatsapp_from";
+
+/**
+ * Remember which Twilio number she actually messaged, so replies go back through the
+ * same conversation. An account can have several senders (a trial number and the
+ * sandbox, say), and replying from the wrong one silently fails for the recipient.
+ */
+export function rememberActiveSender(to: string | undefined) {
+  if (!to || !to.startsWith("whatsapp:")) return;
+  if (kvGet<string>(ACTIVE_FROM_KEY) === to) return;
+  kvSet(ACTIVE_FROM_KEY, to);
+  log.info(`Replies will now be sent from ${to}`);
+}
+
+export function activeSender(): string | undefined {
+  return kvGet<string>(ACTIVE_FROM_KEY) ?? config.TWILIO_WHATSAPP_FROM;
+}
+
 async function deliver(body: string): Promise<void> {
   const provider = await getProvider();
+  const from = activeSender();
   for (const chunk of chunkMessage(body)) {
-    await provider.send(config.userWhatsApp, chunk);
+    await provider.send(config.userWhatsApp, chunk, from);
   }
 }
 
@@ -38,10 +57,12 @@ async function deliver(body: string): Promise<void> {
  * Returns true if delivered now.
  */
 export async function sendToUser(body: string, kind = "chat", opts: { queueIfClosed?: boolean } = {}): Promise<boolean> {
-  addMessage("out", body, kind);
   try {
     await deliver(body);
-    log.info(`Sent ${kind} message (${body.length} chars)`);
+    // Recorded only after delivery succeeds. Logging on attempt made a failed send
+    // look identical to a delivered one, which hid a broken sender for a full day.
+    addMessage("out", body, kind);
+    log.info(`Sent ${kind} message (${body.length} chars) from ${activeSender() ?? "default"}`);
     return true;
   } catch (err) {
     if (err instanceof WindowClosedError) {
@@ -49,12 +70,14 @@ export async function sendToUser(body: string, kind = "chat", opts: { queueIfClo
         log.warn(`24h window closed; dropped time-sensitive ${kind} message`);
         return false;
       }
+      addMessage("out", body, kind);
       enqueueOutbox(body, kind);
       log.warn(`24h window closed; queued ${kind} message`);
       await maybeSendReengagementTemplate();
       return false;
     }
-    throw err;
+    log.error(`Failed to send ${kind} message`, err);
+    return false;
   }
 }
 
