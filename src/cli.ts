@@ -9,7 +9,9 @@
  *   npm run cli -- chat "message"     talk to the agent from the terminal
  *   npm run cli -- reminders          dry-run: which reminders would fire right now
  *   npm run cli -- prefs              list saved preferences
+ *   npm run cli -- models             probe which Gemini models this project can actually use
  */
+import { GoogleGenAI } from "@google/genai";
 import { config } from "./config.js";
 import * as gcal from "./calendar/google.js";
 import { analyzeWeek, renderAnalysis } from "./calendar/analyze.js";
@@ -97,12 +99,52 @@ async function main() {
       console.log(due.length ? due.map((d) => d.message).join("\n\n") : `Nothing due at ${n.toFormat("HH:mm")}.`);
       break;
     }
+    case "models": {
+      // Vertex exposes a different model set than the public Gemini API docs, and it
+      // varies by region. Ask the project directly instead of trusting a docs page.
+      const candidates = (rest[0] ?? [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+      ].join(",")).split(",");
+      const locations = ["us-central1", "global"];
+      const working: string[] = [];
+      for (const location of locations) {
+        const client = new GoogleGenAI({
+          vertexai: true,
+          ...(config.GOOGLE_CLOUD_PROJECT ? { project: config.GOOGLE_CLOUD_PROJECT } : {}),
+          location,
+        });
+        for (const model of candidates) {
+          try {
+            await client.models.generateContent({
+              model,
+              contents: [{ role: "user", parts: [{ text: "hi" }] }],
+              config: { maxOutputTokens: 20 },
+            });
+            console.log(`  OK    ${location.padEnd(12)} ${model}`);
+            working.push(`${location} ${model}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const code = /"code":\s*(\d+)/.exec(msg)?.[1] ?? "err";
+            console.log(`  ${code === "404" ? "404  " : "FAIL "} ${location.padEnd(12)} ${model}`);
+          }
+        }
+      }
+      console.log(working.length ? `\nUsable:\n${working.map((w) => "  " + w).join("\n")}` : "\nNothing worked. Check that Vertex AI is enabled and the VM has the cloud-platform scope.");
+      break;
+    }
     case "prefs": {
       for (const p of listPreferences()) console.log(`${p.key} = ${p.value}`);
       break;
     }
     default:
-      console.log("Commands: auth | calendars | events [days] | analyze | brief [--send] | weekly [--send] | chat \"msg\" | reminders | prefs");
+      console.log("Commands: auth | calendars | events [days] | analyze | brief [--send] | weekly [--send] | chat \"msg\" | reminders | prefs | models");
   }
 }
 
