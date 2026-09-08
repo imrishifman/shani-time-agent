@@ -6,6 +6,7 @@ import { log } from "./logger.js";
 import { buildDailyBrief, buildWeeklyPlan, chat, renderWeeklyPlanMessage } from "./agent/agent.js";
 import { MODEL } from "./agent/client.js";
 import { listPreferences, pendingProposals, recentMessages } from "./db.js";
+import { COMMIT, STARTED_AT } from "./version.js";
 import { flushOutbox, sendToUser } from "./whatsapp/outbox.js";
 
 const publicUrl = config.PUBLIC_URL.replace(/\/$/, "");
@@ -54,6 +55,8 @@ export function createApp() {
 
   app.get("/diag", guardDiag, (_req, res) => {
     res.json({
+      commit: COMMIT,
+      startedAt: STARTED_AT,
       model: MODEL,
       location: config.GOOGLE_CLOUD_LOCATION,
       timezone: config.TIMEZONE,
@@ -103,7 +106,7 @@ export function createApp() {
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, googleConnected: gcal.isAuthorized(), provider: config.WHATSAPP_PROVIDER });
+    res.json({ ok: true, commit: COMMIT, googleConnected: gcal.isAuthorized(), provider: config.WHATSAPP_PROVIDER });
   });
 
   // ---- Google OAuth ----
