@@ -36,7 +36,7 @@ else
 fi
 
 sudo -u "${DEPLOY_USER}" npm --prefix "${APP_DIR}" ci
-sudo -u "${DEPLOY_USER}" npm --prefix "${APP_DIR}" exec --yes --package=typescript@5 -- tsc -p "${APP_DIR}/tsconfig.json"
+sudo -u "${DEPLOY_USER}" npm --prefix "${APP_DIR}" install --no-save --package-lock=false --ignore-scripts typescript@5 && sudo -u "${DEPLOY_USER}" "${APP_DIR}/node_modules/.bin/tsc" -p "${APP_DIR}/tsconfig.json"
 sudo -u "${DEPLOY_USER}" mkdir -p "${APP_DIR}/data"
 
 if [[ ! -f "${APP_DIR}/.env" ]]; then
