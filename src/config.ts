@@ -8,8 +8,11 @@ const csv = (s: string | undefined) =>
     .filter(Boolean);
 
 const schema = z.object({
-  ANTHROPIC_API_KEY: z.string().optional(),
-  CLAUDE_MODEL: z.string().default("claude-opus-5"),
+  // Vertex AI. On a Compute Engine VM these can stay empty: the SDK picks up the
+  // project from the instance metadata and authenticates with its service account.
+  GOOGLE_CLOUD_PROJECT: z.string().optional(),
+  GOOGLE_CLOUD_LOCATION: z.string().default("us-central1"),
+  GEMINI_MODEL: z.string().default("gemini-3.8-flash"),
 
   USER_NAME: z.string().default("Shani"),
   USER_WHATSAPP_NUMBER: z.string().regex(/^\+\d{8,15}$/, "E.164 phone number like +9725XXXXXXX"),

@@ -1,4 +1,4 @@
-import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
+import type { FunctionDeclaration } from "@google/genai";
 import { z } from "zod";
 import { DateTime } from "luxon";
 import * as gcal from "../calendar/google.js";
@@ -6,8 +6,48 @@ import { findFreeSlots } from "../calendar/analyze.js";
 import { isCategory } from "../calendar/classify.js";
 import type { CalEvent } from "../calendar/types.js";
 import { deletePreference, getProposal, kvSet, pendingProposals, resolveProposal, setPreference } from "../db.js";
+import { log } from "../logger.js";
 import { TZ, now } from "../time.js";
 import { applyOperations } from "./apply.js";
+import { toVertexSchema } from "./schema-convert.js";
+
+export type AgentTool = {
+  declaration: FunctionDeclaration;
+  run: (args: Record<string, unknown>) => Promise<string>;
+};
+
+/**
+ * Wraps a Zod schema and handler into a Gemini function declaration.
+ * Arguments are validated before the handler runs; a validation failure is returned
+ * to the model as text so it can correct itself instead of crashing the turn.
+ */
+function defineTool<S extends z.ZodType>(opts: {
+  name: string;
+  description: string;
+  inputSchema: S;
+  run: (args: z.infer<S>) => Promise<string>;
+}): AgentTool {
+  return {
+    declaration: {
+      name: opts.name,
+      description: opts.description,
+      parametersJsonSchema: toVertexSchema(opts.inputSchema),
+    },
+    run: async (raw) => {
+      const parsed = opts.inputSchema.safeParse(raw ?? {});
+      if (!parsed.success) {
+        const detail = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
+        return `Invalid arguments for ${opts.name}: ${detail}`;
+      }
+      try {
+        return await opts.run(parsed.data);
+      } catch (err) {
+        log.error(`Tool ${opts.name} failed`, err);
+        return `${opts.name} failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  };
+}
 
 const fmt = (e: CalEvent) =>
   `${e.allDay ? "all-day" : `${e.start.slice(0, 16)} → ${e.end.slice(11, 16)}`} | ${e.title} [${e.category}]${e.location ? ` @ ${e.location}` : ""} (event_id=${e.id}, calendar_id=${e.calendarId})`;
@@ -18,28 +58,30 @@ const localIso = (s: string) => {
   return dt.toISO()!;
 };
 
-export const getEvents = betaZodTool({
+export const getEvents = defineTool({
   name: "get_events",
-  description: "List calendar events between two dates (inclusive of from_date, exclusive of to_date). Use this before answering any question about her schedule or before changing anything.",
+  description:
+    "List calendar events between two dates (from_date inclusive, to_date exclusive). Use this before answering any question about her schedule or before changing anything.",
   inputSchema: z.object({
     from_date: z.string().describe("YYYY-MM-DD"),
-    to_date: z.string().describe("YYYY-MM-DD (exclusive). For a single day, use the next day."),
+    to_date: z.string().describe("YYYY-MM-DD, exclusive. For a single day, use the next day."),
   }),
   run: async ({ from_date, to_date }) => {
     const from = DateTime.fromISO(from_date, { zone: TZ }).startOf("day");
     const to = DateTime.fromISO(to_date, { zone: TZ }).startOf("day");
+    if (!from.isValid || !to.isValid) return "Dates must be YYYY-MM-DD.";
     const events = await gcal.listEvents(from.toISO()!, to.toISO()!);
     if (!events.length) return `No events between ${from_date} and ${to_date}.`;
     return events.map(fmt).join("\n");
   },
 });
 
-export const findFree = betaZodTool({
+export const findFree = defineTool({
   name: "find_free_slots",
   description: "Find free time slots of at least min_minutes between two dates, within waking hours.",
   inputSchema: z.object({
     from_date: z.string().describe("YYYY-MM-DD"),
-    to_date: z.string().describe("YYYY-MM-DD (exclusive)"),
+    to_date: z.string().describe("YYYY-MM-DD, exclusive"),
     min_minutes: z.number().int().min(15).default(60),
     earliest: z.string().default("08:00").describe("HH:MM"),
     latest: z.string().default("22:00").describe("HH:MM"),
@@ -54,7 +96,7 @@ export const findFree = betaZodTool({
   },
 });
 
-export const createEvent = betaZodTool({
+export const createEvent = defineTool({
   name: "create_event",
   description: "Create a new calendar event.",
   inputSchema: z.object({
@@ -80,7 +122,7 @@ export const createEvent = betaZodTool({
   },
 });
 
-export const updateEvent = betaZodTool({
+export const updateEvent = defineTool({
   name: "update_event",
   description: "Move or edit an existing event. Only the fields you pass are changed. To move an event, pass both start and end.",
   inputSchema: z.object({
@@ -102,9 +144,9 @@ export const updateEvent = betaZodTool({
   },
 });
 
-export const deleteEvent = betaZodTool({
+export const deleteEvent = defineTool({
   name: "delete_event",
-  description: "Delete an event. Destructive: only call with confirmed=true after she explicitly confirmed the specific event.",
+  description: "Delete an event. Destructive: only call with confirmed=true after she explicitly confirmed this specific event.",
   inputSchema: z.object({
     event_id: z.string(),
     calendar_id: z.string(),
@@ -118,21 +160,22 @@ export const deleteEvent = betaZodTool({
   },
 });
 
-export const savePreference = betaZodTool({
+export const savePreference = defineTool({
   name: "save_preference",
-  description: "Remember a durable planning preference (work hours, study habits, commute, course names, reminder lead time, preferred language...).",
+  description:
+    "Remember a durable planning preference (work hours, study habits, commute, course names, reminder lead time, preferred language).",
   inputSchema: z.object({
     key: z.string().describe("snake_case key, e.g. reminder_lead_minutes, study_time_of_day, commute_minutes, work_days, keywords:school, language"),
     value: z.string(),
   }),
   run: async ({ key, value }) => {
-    if (key.startsWith("category:") && !isCategory(value)) return "category values must be school|work|personal|other";
+    if (key.startsWith("category:") && !isCategory(value)) return "category values must be school, work, personal or other";
     setPreference(key, value);
     return `Saved ${key} = ${value}`;
   },
 });
 
-export const forgetPreference = betaZodTool({
+export const forgetPreference = defineTool({
   name: "forget_preference",
   description: "Delete a saved preference by key.",
   inputSchema: z.object({ key: z.string() }),
@@ -142,7 +185,7 @@ export const forgetPreference = betaZodTool({
   },
 });
 
-export const setEventReminder = betaZodTool({
+export const setEventReminder = defineTool({
   name: "set_event_reminder",
   description: "Change the reminder lead time for one specific event (minutes before start), or disable it with minutes_before=0.",
   inputSchema: z.object({
@@ -155,9 +198,9 @@ export const setEventReminder = betaZodTool({
   },
 });
 
-export const snoozeReminders = betaZodTool({
+export const snoozeReminders = defineTool({
   name: "snooze_reminders",
-  description: "Pause all move-on reminders until a given local datetime (e.g. she is on vacation or in an exam).",
+  description: "Pause all move-on reminders until a given local datetime, for example during a vacation or an exam.",
   inputSchema: z.object({ until: z.string().describe("Local ISO datetime, e.g. 2026-09-10T08:00") }),
   run: async ({ until }) => {
     const iso = localIso(until);
@@ -166,7 +209,7 @@ export const snoozeReminders = betaZodTool({
   },
 });
 
-export const listProposals = betaZodTool({
+export const listProposals = defineTool({
   name: "list_proposals",
   description: "Show the pending proposals from the last weekly plan with their operations.",
   inputSchema: z.object({}),
@@ -177,10 +220,12 @@ export const listProposals = betaZodTool({
   },
 });
 
-export const applyProposals = betaZodTool({
+export const applyProposals = defineTool({
   name: "apply_proposals",
-  description: "Apply one or more pending weekly-plan proposals by id (executes their calendar operations).",
-  inputSchema: z.object({ ids: z.array(z.number().int()).min(1).describe("Proposal ids (not display numbers) from the context") }),
+  description: "Apply one or more pending weekly-plan proposals by id, executing their calendar operations.",
+  inputSchema: z.object({
+    ids: z.array(z.number().int()).min(1).describe("Proposal ids, not display numbers, from the context"),
+  }),
   run: async ({ ids }) => {
     const out: string[] = [];
     for (const id of ids) {
@@ -202,9 +247,9 @@ export const applyProposals = betaZodTool({
   },
 });
 
-export const rejectProposals = betaZodTool({
+export const rejectProposals = defineTool({
   name: "reject_proposals",
-  description: "Dismiss pending proposals by id (nothing is changed in the calendar).",
+  description: "Dismiss pending proposals by id. Nothing in the calendar changes.",
   inputSchema: z.object({ ids: z.array(z.number().int()).min(1) }),
   run: async ({ ids }) => {
     for (const id of ids) resolveProposal(id, "rejected");
@@ -212,7 +257,7 @@ export const rejectProposals = betaZodTool({
   },
 });
 
-export const chatTools = [
+export const chatTools: AgentTool[] = [
   getEvents,
   findFree,
   createEvent,
@@ -226,3 +271,5 @@ export const chatTools = [
   applyProposals,
   rejectProposals,
 ];
+
+export const toolsByName = new Map(chatTools.map((t) => [t.declaration.name!, t]));

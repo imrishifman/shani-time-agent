@@ -1,5 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import { ThinkingLevel, type Content, type Part } from "@google/genai";
 import { DateTime } from "luxon";
 import { config } from "../config.js";
 import * as gcal from "../calendar/google.js";
@@ -8,64 +7,105 @@ import type { CalEvent } from "../calendar/types.js";
 import { addMessage, recentMessages } from "../db.js";
 import { log } from "../logger.js";
 import { fmtDateLong, now, parse, weekStart } from "../time.js";
-import { anthropic, FALLBACK_PARAMS, MODEL, textOf } from "./client.js";
+import { genai, MODEL } from "./client.js";
 import { dynamicContext, langName, STABLE_SYSTEM } from "./prompts.js";
 import { WeeklyPlan, type Operation } from "./schemas.js";
-import { chatTools } from "./tools.js";
+import { chatTools, toolsByName } from "./tools.js";
+import { toVertexSchema } from "./schema-convert.js";
 
-function systemBlocks(): Anthropic.Beta.BetaTextBlockParam[] {
-  return [
-    { type: "text", text: STABLE_SYSTEM, cache_control: { type: "ephemeral" } },
-    { type: "text", text: dynamicContext() },
-  ];
+const MAX_TOOL_ITERATIONS = 12;
+
+function systemInstruction(): string {
+  return `${STABLE_SYSTEM}\n\n${dynamicContext()}`;
 }
 
 const fmtEv = (e: CalEvent) =>
   `- ${e.allDay ? "all-day" : `${e.start.slice(11, 16)}–${e.end.slice(11, 16)}`} ${e.title} [${e.category}]${e.location ? ` @ ${e.location}` : ""}`;
 
+/** One-shot generation with no tools. Returns trimmed text, or empty string. */
+async function generateText(prompt: string, thinking: ThinkingLevel): Promise<string> {
+  const res = await genai.models.generateContent({
+    model: MODEL,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction: systemInstruction(),
+      thinkingConfig: { thinkingLevel: thinking },
+      maxOutputTokens: 4000,
+    },
+  });
+  return (res.text ?? "").trim();
+}
+
 // ---------------------------------------------------------------------------
-// Chat: inbound WhatsApp message -> reply (with tools)
+// Chat: inbound WhatsApp message -> reply, with a tool loop
 // ---------------------------------------------------------------------------
 
 /**
- * Handle one inbound message. Stores the inbound text; the caller is responsible for
- * sending (and thereby storing) the reply via sendToUser().
+ * Handle one inbound message. Stores the inbound text; the caller sends the reply
+ * (and thereby stores it) via sendToUser().
  */
 export async function chat(userText: string): Promise<string> {
   addMessage("in", userText);
 
   const since = DateTime.utc().minus({ hours: 24 }).toISO()!;
   const history = recentMessages(30, since);
-  const messages: Anthropic.Beta.BetaMessageParam[] = [];
+  const contents: Content[] = [];
   for (const m of history) {
-    if (!messages.length && m.direction === "out") continue; // conversation must start with a user turn
-    messages.push({ role: m.direction === "in" ? "user" : "assistant", content: m.body });
+    // A Gemini conversation has to start with a user turn.
+    if (!contents.length && m.direction === "out") continue;
+    contents.push({ role: m.direction === "in" ? "user" : "model", parts: [{ text: m.body }] });
   }
-  if (!messages.length || messages[messages.length - 1].role !== "user") messages.push({ role: "user", content: userText });
+  if (!contents.length || contents[contents.length - 1].role !== "user") {
+    contents.push({ role: "user", parts: [{ text: userText }] });
+  }
 
-  const runner = anthropic.beta.messages.toolRunner({
-    model: MODEL,
-    max_tokens: 8000,
-    system: systemBlocks(),
-    tools: chatTools,
-    messages,
-    max_iterations: 12,
-    thinking: { type: "adaptive" },
-    output_config: { effort: "medium" },
-    ...FALLBACK_PARAMS,
-  });
+  const declarations = chatTools.map((t) => t.declaration);
 
-  const final = await runner;
-  if (final.stop_reason === "refusal") {
-    log.warn("Model refused", final.stop_details);
-    return "Sorry, I can't help with that one. Anything else about your schedule?";
+  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const res = await genai.models.generateContent({
+      model: MODEL,
+      contents,
+      config: {
+        systemInstruction: systemInstruction(),
+        tools: [{ functionDeclarations: declarations }],
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        maxOutputTokens: 4000,
+      },
+    });
+
+    const calls = res.functionCalls ?? [];
+    if (!calls.length) {
+      const text = (res.text ?? "").trim();
+      if (text) return text;
+      log.warn("Empty reply from model", { finishReason: res.candidates?.[0]?.finishReason });
+      return "I got a bit lost there. Could you say that again in a different way?";
+    }
+
+    // Echo the model's turn back verbatim. It carries the thought signatures that
+    // Gemini needs in order to continue its own reasoning across tool calls.
+    const modelTurn = res.candidates?.[0]?.content;
+    contents.push(modelTurn?.parts?.length ? modelTurn : { role: "model", parts: calls.map((c) => ({ functionCall: c })) });
+
+    const responseParts: Part[] = [];
+    for (const call of calls) {
+      const tool = call.name ? toolsByName.get(call.name) : undefined;
+      const result = tool
+        ? await tool.run((call.args ?? {}) as Record<string, unknown>)
+        : `Unknown tool: ${call.name}`;
+      log.debug(`tool ${call.name} -> ${result.slice(0, 120)}`);
+      responseParts.push({
+        functionResponse: {
+          ...(call.id ? { id: call.id } : {}),
+          name: call.name,
+          response: { result },
+        },
+      });
+    }
+    contents.push({ role: "user", parts: responseParts });
   }
-  const text = textOf(final);
-  if (!text) {
-    log.warn("Empty reply from model", { stop_reason: final.stop_reason });
-    return "I got a bit lost there. Could you say that again in a different way?";
-  }
-  return text;
+
+  log.warn(`Tool loop hit ${MAX_TOOL_ITERATIONS} iterations without a final answer`);
+  return "That turned into more steps than I expected. Could you narrow it down a bit?";
 }
 
 // ---------------------------------------------------------------------------
@@ -89,30 +129,21 @@ export async function buildDailyBrief(day: DateTime = now()): Promise<string> {
     tomorrow.length ? tomorrow.map(fmtEv).join("\n") : "(nothing scheduled)",
   ].join("\n");
 
-  const instructions = `Write ${config.USER_NAME}'s morning brief for today in ${langName(config.ASSISTANT_LANGUAGE)} (unless a saved preference says otherwise).
+  const instructions = `Write ${config.USER_NAME}'s morning brief for today in ${langName(config.ASSISTANT_LANGUAGE)}, unless a saved preference says otherwise.
 Structure, all in plain WhatsApp text (bold with *asterisks*, no headers):
 1. One-line greeting with the weekday.
-2. Today's events in order: "HH:MM–HH:MM *Title*" plus location if present. Keep them on separate lines.
-3. One or two useful notes: a long gap and what it's good for (study if a school deadline/exam is coming, otherwise rest), a conflict, a very early/late item, or a missing lunch break. Skip this if there is nothing worth saying.
+2. Today's events in order: "HH:MM–HH:MM *Title*" plus location if present, each on its own line.
+3. One or two useful notes: a long gap and what it is good for (study if a school deadline or exam is coming, otherwise rest), a conflict, a very early or late item, or a missing lunch break. Skip this if there is nothing worth saying.
 4. If there are pending weekly-plan proposals (see context), one line reminding her she can reply "apply N".
-5. Last line: when tomorrow starts (first event) or that tomorrow is free.
-Under 900 characters. No filler, no motivational quotes.
+5. Last line: when tomorrow starts, or that tomorrow is free.
+Under 900 characters. No filler, no motivational quotes. Output only the message text.
 
 ${data}`;
 
   try {
-    const res = await anthropic.beta.messages.create({
-      model: MODEL,
-      max_tokens: 2000,
-      system: systemBlocks(),
-      messages: [{ role: "user", content: instructions }],
-      thinking: { type: "adaptive" },
-      output_config: { effort: "low" },
-      ...FALLBACK_PARAMS,
-    });
-    const text = textOf(res);
+    const text = await generateText(instructions, ThinkingLevel.LOW);
     if (text) return text;
-    log.warn("Empty brief from model; using fallback", { stop_reason: res.stop_reason });
+    log.warn("Empty brief from model; using fallback");
   } catch (err) {
     log.error("Brief generation failed; using fallback", err);
   }
@@ -127,13 +158,9 @@ ${data}`;
 // Weekly plan
 // ---------------------------------------------------------------------------
 
-export type WeeklyPlanResult = {
-  weekStart: DateTime;
-  plan: WeeklyPlan;
-  events: CalEvent[];
-};
+export type WeeklyPlanResult = { weekStart: DateTime; plan: WeeklyPlan; events: CalEvent[] };
 
-/** The week to plan: the current one, unless it is nearly over (Fri/Sat), then next week. */
+/** The week to plan: the current one, unless it is nearly over, then next week. */
 export function planningWeekStart(from: DateTime = now()): DateTime {
   const ws = weekStart(from);
   const daysLeft = 7 - Math.floor(from.startOf("day").diff(ws, "days").days);
@@ -148,15 +175,15 @@ export async function buildWeeklyPlan(ws: DateTime = planningWeekStart()): Promi
     (e) => e.category === "school" || /exam|deadline|due|submit|מבחן|הגשה/i.test(e.title),
   );
 
-  const instructions = `Plan ${config.USER_NAME}'s week starting ${ws.toFormat("cccc d LLLL yyyy")}. Write all text fields in ${langName(config.ASSISTANT_LANGUAGE)} (unless a saved preference says otherwise).
+  const instructions = `Plan ${config.USER_NAME}'s week starting ${ws.toFormat("cccc d LLLL yyyy")}. Write all text fields in ${langName(config.ASSISTANT_LANGUAGE)}, unless a saved preference says otherwise.
 
 Your goal is balance between school and work, not a perfect calendar:
 - Point out overloaded days, missing breaks, short nights, conflicts, and days with no time to study.
-- Protect study time before exams/deadlines (see "upcoming" below). If there is none blocked, propose study blocks in free slots that suit her preferences.
-- Propose only concrete, minimal changes. Move flexible things (study blocks, personal tasks, self-created work tasks); never move lectures, exams, shifts or meetings with other people unless they overlap with something and she must choose.
-- Every operation must reference real event_id/calendar_id values from the data below, or create a new event with local times inside this week. Use local ISO datetimes like 2026-09-08T14:00.
-- 0–6 proposals, most impactful first. If the week is fine, say so and propose nothing.
-- Questions only for things you genuinely cannot see (e.g. an assignment deadline she mentioned before).
+- Protect study time before exams and deadlines (see "upcoming" below). If none is blocked out, propose study blocks in free slots that suit her preferences.
+- Propose only concrete, minimal changes. Move flexible things (study blocks, personal tasks, self-created work tasks). Never move lectures, exams, shifts or meetings with other people unless they overlap and she must choose.
+- Every operation must reference real event_id and calendar_id values from the data below, or create a new event with local times inside this week. Use local ISO datetimes like 2026-09-08T14:00.
+- 0 to 6 proposals, most impactful first. If the week is fine, say so and propose nothing.
+- Ask questions only about things you genuinely cannot see.
 
 # Week analysis
 ${renderAnalysis(analysis)}
@@ -164,24 +191,37 @@ ${renderAnalysis(analysis)}
 # Upcoming school items in the following two weeks
 ${upcoming.length ? upcoming.map((e) => `- ${e.start.slice(0, 10)} ${e.title}`).join("\n") : "(none visible)"}`;
 
-  const res = await anthropic.beta.messages.parse({
+  const res = await genai.models.generateContent({
     model: MODEL,
-    max_tokens: 16000,
-    system: systemBlocks(),
-    messages: [{ role: "user", content: instructions }],
-    thinking: { type: "adaptive" },
-    output_config: { effort: "high", format: betaZodOutputFormat(WeeklyPlan) },
-    ...FALLBACK_PARAMS,
+    contents: [{ role: "user", parts: [{ text: instructions }] }],
+    config: {
+      systemInstruction: systemInstruction(),
+      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+      responseMimeType: "application/json",
+      responseJsonSchema: toVertexSchema(WeeklyPlan, "output"),
+      maxOutputTokens: 16000,
+    },
   });
-  if (res.stop_reason === "refusal" || !res.parsed_output) {
-    throw new Error(`Weekly plan failed: stop_reason=${res.stop_reason}`);
+
+  const raw = (res.text ?? "").trim();
+  if (!raw) throw new Error(`Weekly plan returned no content (finishReason=${res.candidates?.[0]?.finishReason})`);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`Weekly plan was not valid JSON: ${raw.slice(0, 200)}`);
   }
-  return { weekStart: ws, plan: res.parsed_output, events };
+  const validated = WeeklyPlan.safeParse(parsed);
+  if (!validated.success) {
+    throw new Error(`Weekly plan did not match the schema: ${validated.error.issues.map((i) => i.path.join(".") + " " + i.message).join("; ")}`);
+  }
+  return { weekStart: ws, plan: validated.data, events };
 }
 
-/** Render a proposal's operations as short human lines (used in the WhatsApp message). */
+/** Render a proposal's operations as short human lines for the WhatsApp message. */
 export function describeOperation(op: Operation, byId: Map<string, CalEvent>): string {
-  const t = (s: string) => `${DateTime.fromISO(s, { zone: config.TIMEZONE }).toFormat("ccc d LLL HH:mm")}`;
+  const t = (s: string) => DateTime.fromISO(s, { zone: config.TIMEZONE }).toFormat("ccc d LLL HH:mm");
   const title = (id: string) => byId.get(id)?.title ?? id;
   switch (op.type) {
     case "create":

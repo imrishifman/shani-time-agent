@@ -9,12 +9,12 @@ A small always-on service that watches Shani's Google Calendar and talks to her 
 | **Move-on reminders** | 10 min before every event (configurable per event) | "⏰ *Algebra* starts in 10 min · 📍 Room 3. Time to wrap up *Work shift* and move on." |
 | **Chat** | Whenever she writes | Ask about the schedule, add/move/delete events, apply or skip proposals, teach it preferences ("I study best in the mornings", "remind me 20 minutes before"). |
 
-Built with the Claude API (tool use + structured outputs), Google Calendar API, Twilio WhatsApp, Node 24, and SQLite for state. Everything runs in Shani's timezone (`America/New_York` by default, week starts on Sunday).
+Built with Gemini on Vertex AI (function calling + structured outputs), Google Calendar API, Twilio WhatsApp, Node 24, and SQLite for state. Everything runs in Shani's timezone (`America/New_York` by default, week starts on Sunday).
 
 ## Architecture
 
 ```
-WhatsApp (Twilio)  ──webhook──▶  Express server  ──▶  Claude agent (tools) ──▶ Google Calendar
+WhatsApp (Twilio)  ──webhook──▶  Express server  ──▶  Gemini agent (tools) ──▶ Google Calendar
         ▲                              │
         └────── replies / briefs ──────┘        cron: daily brief · weekly plan · reminders every minute
                                               SQLite: preferences, chat history, proposals, outbox, reminder dedup
@@ -33,10 +33,12 @@ src/
     classify.ts       school / work / personal / other
     analyze.ts        deterministic week analysis + free-slot search
   agent/
-    prompts.ts        cached system prompt + dynamic context
-    tools.ts          calendar/preference/proposal tools (betaZodTool)
+    client.ts         Vertex AI client (service-account auth, no API key)
+    prompts.ts        system prompt + dynamic context
+    tools.ts          calendar/preference/proposal function declarations
+    schema-convert.ts Zod -> Vertex JSON Schema
     schemas.ts        WeeklyPlan structured-output schema
-    agent.ts          chat(), buildDailyBrief(), buildWeeklyPlan()
+    agent.ts          chat() tool loop, buildDailyBrief(), buildWeeklyPlan()
     apply.ts          executes proposal operations
   jobs/
     reminders.ts      pure computeDueReminders() + minute tick
@@ -49,7 +51,7 @@ src/
 
 ### 1. Prerequisites
 - Node 22.13+ (uses the built-in `node:sqlite`)
-- An Anthropic API key
+- A Google Cloud project with billing (Vertex AI powers the agent)
 - A Google Cloud project with the **Google Calendar API** enabled and an OAuth client of type **Web application**
 - A Twilio account with the WhatsApp sandbox (to start) or an approved WhatsApp sender (for production)
 - A public HTTPS URL for the server (ngrok for local testing, or Railway / Fly.io / a VPS)
@@ -61,7 +63,7 @@ cp .env.example .env
 ```
 Fill in `.env`. The important ones:
 
-- `USER_WHATSAPP_NUMBER` — Shani's number in E.164 (`+9725…`). The agent only talks to this number.
+- `USER_WHATSAPP_NUMBER` — Shani's number in E.164 (`+1954…`). The agent only talks to this number.
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — from the Google Cloud OAuth client. Add `<PUBLIC_URL>/auth/google/callback` as an authorised redirect URI. While the app is in "Testing" mode in Google Cloud, add Shani's Google account as a test user.
 - `SCHOOL_CALENDAR_IDS` / `WORK_CALENDAR_IDS` — optional. If she keeps separate calendars for school and work, listing their IDs makes classification exact. Otherwise keyword rules (English + Hebrew) and preferences she teaches the agent are used.
 - `TWILIO_*` — account SID, auth token, and the WhatsApp sender (`whatsapp:+14155238886` for the sandbox).
@@ -151,7 +153,7 @@ npm test                         # unit tests for analysis / reminders / chunkin
 
 **Classification.** Each event becomes `school`, `work`, `personal`, or `other`: explicit calendar IDs win; then a per-event override she taught the agent; then learned keywords (`keywords:school = "Reichman, Dr. Levi"`); then built-in English/Hebrew keywords.
 
-**Weekly plan.** Code computes the facts (hours per category per day, back-to-back streaks, lunch breaks, free blocks, conflicts, short nights). Claude turns that into a short structured plan: observations, up to 6 proposals, each with concrete operations (`create` / `move` / `update` / `delete`) that reference real event IDs. Proposals are stored as *pending* and nothing changes in the calendar until she says "apply …". Old pending proposals expire when a new plan is generated.
+**Weekly plan.** Code computes the facts (hours per category per day, back-to-back streaks, lunch breaks, free blocks, conflicts, short nights). Gemini turns that into a short structured plan: observations, up to 6 proposals, each with concrete operations (`create` / `move` / `update` / `delete`) that reference real event IDs. Proposals are stored as *pending* and nothing changes in the calendar until she says "apply …". Old pending proposals expire when a new plan is generated.
 
 **Chat.** Each inbound message runs the agent with the last 24 h of conversation and tools for reading/editing the calendar, finding free slots, saving preferences, and applying proposals. Deletions require an explicit confirmation turn. Messages from any other phone number are ignored, and Twilio signatures are verified.
 
