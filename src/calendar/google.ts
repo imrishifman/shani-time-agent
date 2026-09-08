@@ -1,5 +1,11 @@
-import { google, type calendar_v3 } from "googleapis";
-import type { OAuth2Client, Credentials } from "google-auth-library";
+// Per-API package rather than the full Google client bundle: 852 KB of typings instead of
+// 207 MB, which keeps `tsc` well under the 1 GB RAM of the e2-micro VM.
+import { auth as googleAuth, calendar as calendarApi, type calendar_v3 } from "@googleapis/calendar";
+
+// Derived from the calendar package rather than imported from google-auth-library directly,
+// so a nested copy of that library can never cause a duplicate-type mismatch.
+type OAuth2Client = InstanceType<typeof googleAuth.OAuth2>;
+type Credentials = NonNullable<Parameters<OAuth2Client["setCredentials"]>[0]>;
 import { DateTime } from "luxon";
 import { config } from "../config.js";
 import { kvGet, kvSet } from "../db.js";
@@ -17,7 +23,7 @@ let oauth: OAuth2Client | undefined;
 
 function client(): OAuth2Client {
   if (oauth) return oauth;
-  oauth = new google.auth.OAuth2(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, redirectUri);
+  oauth = new googleAuth.OAuth2(config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, redirectUri);
   const saved = kvGet<Credentials>(TOKEN_KEY);
   if (saved) oauth.setCredentials(saved);
   oauth.on("tokens", (tokens) => {
@@ -46,7 +52,7 @@ export async function exchangeCode(code: string): Promise<void> {
 
 function api(): calendar_v3.Calendar {
   if (!isAuthorized()) throw new Error("Google Calendar is not connected yet. Open /auth/google on the server to connect it.");
-  return google.calendar({ version: "v3", auth: client() });
+  return calendarApi({ version: "v3", auth: client() });
 }
 
 export async function listCalendars(): Promise<{ id: string; summary: string; primary: boolean; selected: boolean }[]> {
