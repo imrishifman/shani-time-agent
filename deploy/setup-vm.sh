@@ -36,7 +36,7 @@ else
 fi
 
 if ! sudo swapon --show | grep -q .; then sudo fallocate -l 1G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=1024; sudo chmod 600 /swapfile; sudo mkswap /swapfile; sudo swapon /swapfile; grep -q '^/swapfile ' /etc/fstab || echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab >/dev/null; fi; sudo -u "${DEPLOY_USER}" npm --prefix "${APP_DIR}" ci
-sudo -u "${DEPLOY_USER}" npm --prefix "${APP_DIR}" install --no-save --package-lock=false --ignore-scripts typescript@5 && sudo -u "${DEPLOY_USER}" "${APP_DIR}/node_modules/.bin/tsc" -p "${APP_DIR}/tsconfig.json"
+sudo -u "${DEPLOY_USER}" npm --prefix "${APP_DIR}" install --no-save --package-lock=false --ignore-scripts typescript@5 && sudo -u "${DEPLOY_USER}" env NODE_OPTIONS=--max-old-space-size=1536 "${APP_DIR}/node_modules/.bin/tsc" -p "${APP_DIR}/tsconfig.json"
 sudo -u "${DEPLOY_USER}" mkdir -p "${APP_DIR}/data"
 
 if [[ ! -f "${APP_DIR}/.env" ]]; then
