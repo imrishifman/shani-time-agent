@@ -14,7 +14,7 @@ const schema = z.object({
   USER_NAME: z.string().default("Shani"),
   USER_WHATSAPP_NUMBER: z.string().regex(/^\+\d{8,15}$/, "E.164 phone number like +9725XXXXXXX"),
   ASSISTANT_LANGUAGE: z.string().default("en"),
-  TIMEZONE: z.string().default("Asia/Jerusalem"),
+  TIMEZONE: z.string().default("America/New_York"),
 
   GOOGLE_CLIENT_ID: z.string().min(1),
   GOOGLE_CLIENT_SECRET: z.string().min(1),
@@ -36,7 +36,7 @@ const schema = z.object({
     .transform((v) => v !== "false"),
 
   DAILY_BRIEF_CRON: z.string().default("30 7 * * *"),
-  WEEKLY_PLAN_CRON: z.string().default("0 19 * * 6"),
+  WEEKLY_PLAN_CRON: z.string().default("0 19 * * 0"),
   REMINDER_LEAD_MINUTES: z.coerce.number().int().min(1).max(120).default(10),
   QUIET_HOURS_START: z.string().regex(/^\d{2}:\d{2}$/).default("23:00"),
   QUIET_HOURS_END: z.string().regex(/^\d{2}:\d{2}$/).default("07:00"),

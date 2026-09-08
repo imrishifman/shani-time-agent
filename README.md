@@ -4,12 +4,12 @@ A small always-on service that watches Shani's Google Calendar and talks to her 
 
 | What | When | How |
 |---|---|---|
-| **Weekly plan** | Saturday 19:00 (configurable) | Scans next week, analyses school vs. work load, conflicts, missing breaks, short nights, and study time before exams. Sends numbered suggestions she can accept with "apply 1, 3". |
+| **Weekly plan** | Sunday 19:00 (configurable) | Scans next week, analyses school vs. work load, conflicts, missing breaks, short nights, and study time before exams. Sends numbered suggestions she can accept with "apply 1, 3". |
 | **Daily brief** | 07:30 every day | Today's events in order, useful gaps, conflicts, what tomorrow starts with. |
 | **Move-on reminders** | 10 min before every event (configurable per event) | "⏰ *Algebra* starts in 10 min · 📍 Room 3. Time to wrap up *Work shift* and move on." |
 | **Chat** | Whenever she writes | Ask about the schedule, add/move/delete events, apply or skip proposals, teach it preferences ("I study best in the mornings", "remind me 20 minutes before"). |
 
-Built with the Claude API (tool use + structured outputs), Google Calendar API, Twilio WhatsApp, Node 24, and SQLite for state. Everything runs in Shani's timezone (`Asia/Jerusalem` by default, week starts on Sunday).
+Built with the Claude API (tool use + structured outputs), Google Calendar API, Twilio WhatsApp, Node 24, and SQLite for state. Everything runs in Shani's timezone (`America/New_York` by default, week starts on Sunday).
 
 ## Architecture
 
