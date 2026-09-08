@@ -12,7 +12,7 @@ const schema = z.object({
   // project from the instance metadata and authenticates with its service account.
   GOOGLE_CLOUD_PROJECT: z.string().optional(),
   GOOGLE_CLOUD_LOCATION: z.string().default("us-central1"),
-  GEMINI_MODEL: z.string().default("gemini-3.8-flash"),
+  GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
 
   USER_NAME: z.string().default("Shani"),
   USER_WHATSAPP_NUMBER: z.string().regex(/^\+\d{8,15}$/, "E.164 phone number like +9725XXXXXXX"),

@@ -5,6 +5,22 @@ import { log } from "../logger.js";
 export const MODEL = config.GEMINI_MODEL;
 export { ThinkingLevel };
 
+/** True for Gemini 3 and newer, which use thinkingLevel rather than a token budget. */
+const USES_THINKING_LEVEL = /^gemini-(?:[3-9]|\d{2})/.test(config.GEMINI_MODEL);
+
+/**
+ * Thinking config for the configured model family.
+ *
+ * Gemini 3 takes a qualitative `thinkingLevel`; Gemini 2.5 takes a `thinkingBudget`
+ * in tokens, where -1 lets the model decide. Sending the wrong one is rejected.
+ */
+export function thinkingFor(effort: "low" | "high") {
+  if (USES_THINKING_LEVEL) {
+    return { thinkingLevel: effort === "high" ? ThinkingLevel.HIGH : ThinkingLevel.LOW };
+  }
+  return { thinkingBudget: effort === "high" ? 8192 : -1 };
+}
+
 const METADATA_PROJECT_URL = "http://metadata.google.internal/computeMetadata/v1/project/project-id";
 
 let projectPromise: Promise<string> | undefined;

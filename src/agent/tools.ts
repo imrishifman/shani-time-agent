@@ -9,7 +9,7 @@ import { deletePreference, getProposal, kvSet, pendingProposals, resolveProposal
 import { log } from "../logger.js";
 import { TZ, now } from "../time.js";
 import { applyOperations } from "./apply.js";
-import { toVertexSchema } from "./schema-convert.js";
+import { toVertexSchemaObject } from "./schema-convert.js";
 
 export type AgentTool = {
   declaration: FunctionDeclaration;
@@ -31,7 +31,7 @@ function defineTool<S extends z.ZodType>(opts: {
     declaration: {
       name: opts.name,
       description: opts.description,
-      parametersJsonSchema: toVertexSchema(opts.inputSchema),
+      parameters: toVertexSchemaObject(opts.inputSchema) as FunctionDeclaration["parameters"],
     },
     run: async (raw) => {
       const parsed = opts.inputSchema.safeParse(raw ?? {});

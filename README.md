@@ -9,7 +9,7 @@ A small always-on service that watches Shani's Google Calendar and talks to her 
 | **Move-on reminders** | 10 min before every event (configurable per event) | "⏰ *Algebra* starts in 10 min · 📍 Room 3. Time to wrap up *Work shift* and move on." |
 | **Chat** | Whenever she writes | Ask about the schedule, add/move/delete events, apply or skip proposals, teach it preferences ("I study best in the mornings", "remind me 20 minutes before"). |
 
-Built with Gemini on Vertex AI (function calling + structured outputs), Google Calendar API, Twilio WhatsApp, Node 24, and SQLite for state. Everything runs in Shani's timezone (`America/New_York` by default, week starts on Sunday).
+Built with Gemini on Vertex AI (function calling + structured outputs, `gemini-2.5-flash` by default), Google Calendar API, Twilio WhatsApp, Node 24, and SQLite for state. Everything runs in Shani's timezone (`America/New_York` by default, week starts on Sunday).
 
 ## Architecture
 

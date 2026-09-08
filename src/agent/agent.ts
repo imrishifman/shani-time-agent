@@ -1,4 +1,4 @@
-import { ThinkingLevel, type Content, type Part } from "@google/genai";
+import type { Content, Part, Schema } from "@google/genai";
 import { DateTime } from "luxon";
 import { config } from "../config.js";
 import * as gcal from "../calendar/google.js";
@@ -7,11 +7,11 @@ import type { CalEvent } from "../calendar/types.js";
 import { addMessage, recentMessages } from "../db.js";
 import { log } from "../logger.js";
 import { fmtDateLong, now, parse, weekStart } from "../time.js";
-import { getClient, MODEL } from "./client.js";
+import { getClient, MODEL, thinkingFor } from "./client.js";
 import { dynamicContext, langName, STABLE_SYSTEM } from "./prompts.js";
 import { WeeklyPlan, type Operation } from "./schemas.js";
 import { chatTools, toolsByName } from "./tools.js";
-import { toVertexSchema } from "./schema-convert.js";
+import { toVertexSchemaObject } from "./schema-convert.js";
 
 const MAX_TOOL_ITERATIONS = 12;
 
@@ -23,13 +23,13 @@ const fmtEv = (e: CalEvent) =>
   `- ${e.allDay ? "all-day" : `${e.start.slice(11, 16)}–${e.end.slice(11, 16)}`} ${e.title} [${e.category}]${e.location ? ` @ ${e.location}` : ""}`;
 
 /** One-shot generation with no tools. Returns trimmed text, or empty string. */
-async function generateText(prompt: string, thinking: ThinkingLevel): Promise<string> {
+async function generateText(prompt: string, effort: "low" | "high"): Promise<string> {
   const res = await (await getClient()).models.generateContent({
     model: MODEL,
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: {
       systemInstruction: systemInstruction(),
-      thinkingConfig: { thinkingLevel: thinking },
+      thinkingConfig: thinkingFor(effort),
       maxOutputTokens: 4000,
     },
   });
@@ -68,7 +68,7 @@ export async function chat(userText: string): Promise<string> {
       config: {
         systemInstruction: systemInstruction(),
         tools: [{ functionDeclarations: declarations }],
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        thinkingConfig: thinkingFor("low"),
         maxOutputTokens: 4000,
       },
     });
@@ -141,7 +141,7 @@ Under 900 characters. No filler, no motivational quotes. Output only the message
 ${data}`;
 
   try {
-    const text = await generateText(instructions, ThinkingLevel.LOW);
+    const text = await generateText(instructions, "low");
     if (text) return text;
     log.warn("Empty brief from model; using fallback");
   } catch (err) {
@@ -196,9 +196,9 @@ ${upcoming.length ? upcoming.map((e) => `- ${e.start.slice(0, 10)} ${e.title}`).
     contents: [{ role: "user", parts: [{ text: instructions }] }],
     config: {
       systemInstruction: systemInstruction(),
-      thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+      thinkingConfig: thinkingFor("high"),
       responseMimeType: "application/json",
-      responseJsonSchema: toVertexSchema(WeeklyPlan, "output"),
+      responseSchema: toVertexSchemaObject(WeeklyPlan, "output") as Schema,
       maxOutputTokens: 16000,
     },
   });
