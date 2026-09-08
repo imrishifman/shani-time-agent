@@ -89,6 +89,16 @@ npm run build && npm start
 ```
 Health check: `GET /health` → `{"ok":true,"googleConnected":true,...}`.
 
+**Diagnostics.** Set `DIAG_TOKEN` to a long random string to enable two extra routes,
+both requiring `?token=` or an `X-Diag-Token` header. Without the variable they return 404.
+- `GET /diag` — model, region, timezone, schedules, saved preference keys, pending
+  proposal count, and a preview of the last ten messages.
+- `GET /diag/brief` — generates today's brief and reports `source: "model"` or
+  `"fallback"`, which is the only reliable way to tell whether the model call is
+  actually working, since the fallback is written to read naturally.
+
+The token exposes calendar-derived text, so treat it as a password and delete the line to revoke it.
+
 ### Docker
 ```bash
 docker build -t shani-agent .

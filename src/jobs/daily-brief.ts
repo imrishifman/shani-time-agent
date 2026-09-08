@@ -9,6 +9,7 @@ export async function runDailyBrief(): Promise<string> {
     return "";
   }
   const brief = await buildDailyBrief();
-  await sendToUser(brief, "brief");
-  return brief;
+  if (brief.source === "fallback") log.warn(`Daily brief fell back to the plain list: ${brief.error ?? "unknown reason"}`);
+  await sendToUser(brief.text, "brief");
+  return brief.text;
 }

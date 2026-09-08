@@ -112,7 +112,13 @@ export async function chat(userText: string): Promise<string> {
 // Daily brief
 // ---------------------------------------------------------------------------
 
-export async function buildDailyBrief(day: DateTime = now()): Promise<string> {
+export type BriefResult = { text: string; source: "model" | "fallback"; error?: string };
+
+/**
+ * Builds the morning brief. Reports its source, because the fallback is deliberately
+ * indistinguishable to a reader and would otherwise hide a broken model call.
+ */
+export async function buildDailyBrief(day: DateTime = now()): Promise<BriefResult> {
   const d0 = day.startOf("day");
   const d1 = d0.plus({ days: 1 });
   const d2 = d0.plus({ days: 2 });
@@ -140,18 +146,21 @@ Under 900 characters. No filler, no motivational quotes. Output only the message
 
 ${data}`;
 
+  let error: string | undefined;
   try {
     const text = await generateText(instructions, "low");
-    if (text) return text;
+    if (text) return { text, source: "model" };
+    error = "model returned empty text";
     log.warn("Empty brief from model; using fallback");
   } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
     log.error("Brief generation failed; using fallback", err);
   }
   // Deterministic fallback so the brief never silently disappears.
   const lines = [`Good morning ${config.USER_NAME}! ${d0.toFormat("cccc d LLL")}:`];
   lines.push(...(today.length ? today.map(fmtEv) : ["Nothing scheduled today."]));
   if (tomorrow[0]) lines.push(`Tomorrow starts ${tomorrow[0].allDay ? "with an all-day item" : `at ${tomorrow[0].start.slice(11, 16)}`}.`);
-  return lines.join("\n");
+  return { text: lines.join("\n"), source: "fallback", error };
 }
 
 // ---------------------------------------------------------------------------

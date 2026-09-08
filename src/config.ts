@@ -44,6 +44,10 @@ const schema = z.object({
   QUIET_HOURS_START: z.string().regex(/^\d{2}:\d{2}$/).default("23:00"),
   QUIET_HOURS_END: z.string().regex(/^\d{2}:\d{2}$/).default("07:00"),
 
+  // Optional. When set, enables the token-protected /diag endpoints for debugging.
+  // Leave empty to disable them entirely.
+  DIAG_TOKEN: z.string().min(16).optional(),
+
   DATABASE_PATH: z.string().default("./data/agent.sqlite"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });

@@ -66,7 +66,11 @@ async function main() {
     }
     case "brief": {
       if (flag("--send")) console.log(await runDailyBrief());
-      else console.log(await buildDailyBrief());
+      else {
+        const b = await buildDailyBrief();
+        console.log(b.text);
+        console.log(`\n[source: ${b.source}${b.error ? ` — ${b.error}` : ""}]`);
+      }
       break;
     }
     case "weekly": {
