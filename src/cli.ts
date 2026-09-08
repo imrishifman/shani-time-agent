@@ -12,6 +12,7 @@
  *   npm run cli -- models             probe which Gemini models this project can actually use
  */
 import { GoogleGenAI } from "@google/genai";
+import { resolveProject } from "./agent/client.js";
 import { config } from "./config.js";
 import * as gcal from "./calendar/google.js";
 import { analyzeWeek, renderAnalysis } from "./calendar/analyze.js";
@@ -115,11 +116,7 @@ async function main() {
       const locations = ["us-central1", "global"];
       const working: string[] = [];
       for (const location of locations) {
-        const client = new GoogleGenAI({
-          vertexai: true,
-          ...(config.GOOGLE_CLOUD_PROJECT ? { project: config.GOOGLE_CLOUD_PROJECT } : {}),
-          location,
-        });
+        const client = new GoogleGenAI({ vertexai: true, project: await resolveProject(), location });
         for (const model of candidates) {
           try {
             await client.models.generateContent({

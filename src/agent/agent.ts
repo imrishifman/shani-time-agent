@@ -7,7 +7,7 @@ import type { CalEvent } from "../calendar/types.js";
 import { addMessage, recentMessages } from "../db.js";
 import { log } from "../logger.js";
 import { fmtDateLong, now, parse, weekStart } from "../time.js";
-import { genai, MODEL } from "./client.js";
+import { getClient, MODEL } from "./client.js";
 import { dynamicContext, langName, STABLE_SYSTEM } from "./prompts.js";
 import { WeeklyPlan, type Operation } from "./schemas.js";
 import { chatTools, toolsByName } from "./tools.js";
@@ -24,7 +24,7 @@ const fmtEv = (e: CalEvent) =>
 
 /** One-shot generation with no tools. Returns trimmed text, or empty string. */
 async function generateText(prompt: string, thinking: ThinkingLevel): Promise<string> {
-  const res = await genai.models.generateContent({
+  const res = await (await getClient()).models.generateContent({
     model: MODEL,
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: {
@@ -62,7 +62,7 @@ export async function chat(userText: string): Promise<string> {
   const declarations = chatTools.map((t) => t.declaration);
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    const res = await genai.models.generateContent({
+    const res = await (await getClient()).models.generateContent({
       model: MODEL,
       contents,
       config: {
@@ -191,7 +191,7 @@ ${renderAnalysis(analysis)}
 # Upcoming school items in the following two weeks
 ${upcoming.length ? upcoming.map((e) => `- ${e.start.slice(0, 10)} ${e.title}`).join("\n") : "(none visible)"}`;
 
-  const res = await genai.models.generateContent({
+  const res = await (await getClient()).models.generateContent({
     model: MODEL,
     contents: [{ role: "user", parts: [{ text: instructions }] }],
     config: {
